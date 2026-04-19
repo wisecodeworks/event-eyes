@@ -1,8 +1,25 @@
 ;(function () {
   'use strict';
 
-  const NONCE = window.__eeNonce || '';
-  delete window.__eeNonce;
+  // Runs at document_start (before any page scripts) so we intercept
+  // sendBeacon/fetch before GTM or gtag.js can cache their own references.
+  if (window.__eeEarlyInit) return;
+  window.__eeEarlyInit = true;
+
+  // Captured events buffer — read by injected.js when the panel opens.
+  window.__eeEvents = [];
+  // Live-forward callback — set by injected.js after panel opens.
+  window.__eeForward = null;
+
+  // ── Native refs (captured before any page code runs) ──────────────────
+  const _sendBeacon = typeof navigator.sendBeacon === 'function'
+    ? navigator.sendBeacon.bind(navigator) : null;
+  const _fetch = typeof window.fetch === 'function'
+    ? window.fetch.bind(window) : null;
+  const _xhrOpen = XMLHttpRequest.prototype.open;
+  const _xhrSend = XMLHttpRequest.prototype.send;
+
+  // ── Helpers ────────────────────────────────────────────────────────────
 
   function timestamp() {
     const d = new Date();
@@ -12,38 +29,39 @@
            String(d.getMilliseconds()).padStart(3, '0');
   }
 
-  function dispatch(type, name, data, ts) {
-    window.postMessage({
-      __eventEyes: true,
-      nonce: NONCE,
-      type,
-      name,
-      data,
-      timestamp: ts || timestamp()
-    }, '*');
-  }
-
-  // ── Path A: early.js ran in MAIN world before page scripts ────────────
-  // Replay its buffer then subscribe for live events going forward.
-  if (window.__eeEarlyInit && Array.isArray(window.__eeEvents)) {
-    for (const evt of window.__eeEvents) {
-      dispatch(evt.type, evt.name, evt.data, evt.timestamp);
+  // Strip DOM nodes, Events, and circular refs so postMessage can clone the data.
+  function sanitize(obj, depth, seen) {
+    if (depth === undefined) depth = 0;
+    if (depth > 5) return '[Deep]';
+    if (obj === null || obj === undefined) return obj;
+    const t = typeof obj;
+    if (t === 'string' || t === 'number' || t === 'boolean') return obj;
+    if (t === 'function') return '[Function]';
+    if (t !== 'object') return String(obj);
+    if (obj instanceof Element)
+      return '[' + obj.tagName + (obj.id ? '#' + obj.id : '') + ']';
+    if (obj instanceof Event) return '[Event:' + obj.type + ']';
+    if (obj instanceof Node) return '[Node:' + obj.nodeName + ']';
+    if (!seen) seen = new WeakSet();
+    if (seen.has(obj)) return '[Circular]';
+    seen.add(obj);
+    if (Array.isArray(obj)) return obj.map(function(v) { return sanitize(v, depth + 1, seen); });
+    var result = {};
+    var keys = Object.keys(obj);
+    for (var i = 0; i < keys.length; i++) {
+      try { result[keys[i]] = sanitize(obj[keys[i]], depth + 1, seen); } catch (e) { result[keys[i]] = '[Error]'; }
     }
-    window.__eeForward = function (evt) {
-      dispatch(evt.type, evt.name, evt.data, evt.timestamp);
-    };
-    return; // done — early.js handles all capture
+    return result;
   }
 
-  // ── Path B: early.js didn't run (page loaded before extension, or world
-  // mismatch). Set up interceptors now as best-effort fallback. ──────────
+  function record(type, name, data) {
+    var evt = { type: type, name: name, data: sanitize(data), timestamp: timestamp() };
+    window.__eeEvents.push(evt);
+    if (window.__eeEvents.length > 500) window.__eeEvents.shift();
+    if (typeof window.__eeForward === 'function') window.__eeForward(evt);
+  }
 
-  const _sendBeacon = typeof navigator.sendBeacon === 'function'
-    ? navigator.sendBeacon.bind(navigator) : null;
-  const _fetch = typeof window.fetch === 'function'
-    ? window.fetch.bind(window) : null;
-  const _xhrOpen = XMLHttpRequest.prototype.open;
-  const _xhrSend = XMLHttpRequest.prototype.send;
+  // ── GA4 helpers ────────────────────────────────────────────────────────
 
   const ga4Seen = new Set();
 
@@ -61,6 +79,7 @@
       eventParams: {},
       userProperties: {}
     };
+
     function parsePairs(str) {
       if (!str) return;
       for (const pair of str.split('&')) {
@@ -80,6 +99,7 @@
         } catch {}
       }
     }
+
     parsePairs(url.split('?')[1] || '');
     if (typeof body === 'string') parsePairs(body);
     else if (body instanceof URLSearchParams) parsePairs(body.toString());
@@ -95,10 +115,11 @@
     ga4Seen.add(sig);
     if (ga4Seen.size > 500) ga4Seen.delete(ga4Seen.values().next().value);
     const parsed = parseGA4(url, body);
-    dispatch('ga4', parsed.eventName, parsed);
+    record('ga4', parsed.eventName, parsed);
   }
 
-  // sendBeacon
+  // ── navigator.sendBeacon ───────────────────────────────────────────────
+
   if (_sendBeacon) {
     navigator.sendBeacon = function (url, data) {
       if (isGA4Url(url)) handleGA4(url, data);
@@ -106,7 +127,8 @@
     };
   }
 
-  // fetch
+  // ── window.fetch ───────────────────────────────────────────────────────
+
   if (_fetch) {
     window.fetch = function (resource, init) {
       const url = typeof resource === 'string' ? resource
@@ -116,7 +138,8 @@
     };
   }
 
-  // XHR
+  // ── XMLHttpRequest ─────────────────────────────────────────────────────
+
   XMLHttpRequest.prototype.open = function (method, url) {
     this.__eeUrl = typeof url === 'string' ? url : '';
     return _xhrOpen.apply(this, arguments);
@@ -126,27 +149,34 @@
     return _xhrSend.apply(this, arguments);
   };
 
-  // dataLayer
+  // ── dataLayer ──────────────────────────────────────────────────────────
+
   window.dataLayer = window.dataLayer || [];
+
+  // Replay any items already present before this script ran (rare at document_start).
   for (const item of window.dataLayer) {
     if (item && typeof item === 'object' && typeof item !== 'function') {
       const name = item.event || Object.keys(item)[0] || '(data)';
-      dispatch('dataLayer', name, Object.assign({ _source: 'pre-existing' }, item));
+      record('dataLayer', name, Object.assign({ _source: 'pre-existing' }, item));
     }
   }
+
   const _dlPush = window.dataLayer.push;
   window.dataLayer.push = function () {
     for (let i = 0; i < arguments.length; i++) {
       const item = arguments[i];
       if (item && typeof item === 'object' && typeof item !== 'function') {
         const name = item.event || Object.keys(item)[0] || '(data)';
-        dispatch('dataLayer', name, item);
+        record('dataLayer', name, item);
       }
     }
     return _dlPush.apply(window.dataLayer, arguments);
   };
 
-  // PerformanceObserver fallback — catches GA4 hits even if GTM cached sendBeacon/fetch
+  // ── PerformanceObserver fallback ───────────────────────────────────────
+  // Catches any GA4 requests that slip past the interceptors above.
+  // Uses startTime as uniquifier so distinct hits to the same URL aren't collapsed.
+
   if (window.PerformanceObserver) {
     try {
       const obs = new PerformanceObserver((list) => {

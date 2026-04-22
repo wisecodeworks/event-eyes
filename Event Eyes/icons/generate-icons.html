@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Event Eyes — Icon Generator</title>
+  <style>
+    body {
+      font-family: ui-monospace, monospace;
+      background: #0a0a0a;
+      color: #ccc;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+      gap: 32px;
+    }
+    h1 { color: #FEF484; margin: 0; font-size: 20px; }
+    p  { color: #666; margin: 0; font-size: 13px; text-align: center; max-width: 480px; line-height: 1.6; }
+    .icons { display: flex; gap: 40px; align-items: flex-end; flex-wrap: wrap; justify-content: center; }
+    .icon-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+    canvas { image-rendering: pixelated; border: 1px solid #333; border-radius: 4px; }
+    a {
+      background: #FF4876;
+      color: #fff;
+      text-decoration: none;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    a:hover { background: #e03060; }
+    .label { color: #555; font-size: 11px; }
+    .instructions {
+      background: #151515;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 16px 24px;
+      max-width: 480px;
+      font-size: 12px;
+      line-height: 1.8;
+    }
+    .instructions ol { margin: 0; padding-left: 18px; color: #aaa; }
+    .instructions li { margin-bottom: 4px; }
+    code { background: #252525; padding: 2px 6px; border-radius: 3px; color: #FF4876; }
+  </style>
+</head>
+<body>
+  <h1>👁 Event Eyes — Icon Generator</h1>
+  <p>Click each download button and save the file to the <code>icons/</code> folder inside your extension directory.</p>
+
+  <div class="icons" id="icons"></div>
+
+  <div class="instructions">
+    <ol>
+      <li>Download all three icons below.</li>
+      <li>Save them as <code>icon16.png</code>, <code>icon48.png</code>, <code>icon128.png</code> inside the <code>Event Eyes/icons/</code> folder.</li>
+      <li>Go to <code>chrome://extensions</code>, enable Developer Mode, click <strong>Load unpacked</strong>, and select the <code>Event Eyes</code> folder.</li>
+    </ol>
+  </div>
+
+  <script>
+    const SIZES = [16, 48, 128];
+    const BG    = '#0a0a0a';
+    const PINK  = '#FF4876';
+    const WHITE = '#ffffff';
+
+    function drawIcon(size) {
+      const canvas = document.createElement('canvas');
+      canvas.width  = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+
+      const r = size * 0.14; // corner radius
+
+      // Background rounded rect
+      ctx.fillStyle = BG;
+      roundRect(ctx, 0, 0, size, size, r);
+      ctx.fill();
+
+      // Pink border
+      ctx.strokeStyle = PINK;
+      ctx.lineWidth = Math.max(1, size * 0.055);
+      roundRect(ctx, ctx.lineWidth / 2, ctx.lineWidth / 2,
+                     size - ctx.lineWidth, size - ctx.lineWidth, r * 0.85);
+      ctx.stroke();
+
+      // Eye whites — almond shape
+      const cx = size / 2;
+      const cy = size / 2;
+      const ew = size * 0.60; // eye half-width
+      const eh = size * 0.28; // eye half-height
+
+      ctx.beginPath();
+      ctx.moveTo(cx - ew / 2, cy);
+      ctx.quadraticCurveTo(cx, cy - eh, cx + ew / 2, cy);
+      ctx.quadraticCurveTo(cx, cy + eh, cx - ew / 2, cy);
+      ctx.closePath();
+      ctx.fillStyle = WHITE;
+      ctx.fill();
+
+      // Iris (pink circle)
+      const ir = size * 0.115;
+      ctx.beginPath();
+      ctx.arc(cx, cy, ir, 0, Math.PI * 2);
+      ctx.fillStyle = PINK;
+      ctx.fill();
+
+      // Pupil (dark dot)
+      const pr = size * 0.055;
+      ctx.beginPath();
+      ctx.arc(cx, cy, pr, 0, Math.PI * 2);
+      ctx.fillStyle = '#0a0a0a';
+      ctx.fill();
+
+      // Highlight
+      if (size >= 48) {
+        const hr = size * 0.022;
+        ctx.beginPath();
+        ctx.arc(cx + ir * 0.3, cy - ir * 0.3, hr, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.fill();
+      }
+
+      return canvas;
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y,     x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h,     x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y,         x + r, y);
+      ctx.closePath();
+    }
+
+    const container = document.getElementById('icons');
+
+    SIZES.forEach(size => {
+      const canvas = drawIcon(size);
+
+      // Display canvas scaled up so small sizes are visible
+      const displaySize = Math.max(size, 80);
+      canvas.style.width  = displaySize + 'px';
+      canvas.style.height = displaySize + 'px';
+
+      const link = document.createElement('a');
+      link.textContent = `Download icon${size}.png`;
+      link.download = `icon${size}.png`;
+      link.href = canvas.toDataURL('image/png');
+
+      const label = document.createElement('div');
+      label.className = 'label';
+      label.textContent = `${size}×${size}`;
+
+      const wrap = document.createElement('div');
+      wrap.className = 'icon-wrap';
+      wrap.append(canvas, label, link);
+      container.appendChild(wrap);
+    });
+  </script>
+</body>
+</html>

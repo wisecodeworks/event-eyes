@@ -1,15 +1,33 @@
 ;(function () {
   'use strict';
 
-  // Runs at document_start (before any page scripts) so we intercept
-  // sendBeacon/fetch before GTM or gtag.js can cache their own references.
   if (window.__eeEarlyInit) return;
   window.__eeEarlyInit = true;
 
-  // Captured events buffer — read by injected.js when the panel opens.
   window.__eeEvents = [];
-  // Live-forward callback — set by injected.js after panel opens.
   window.__eeForward = null;
+
+  // ── Element map for highlight feature ──────────────────────────────────
+  window.__eeElementMap = new Map();
+  var __eeEventId = 0;
+  var __eeLastClick = { el: null, time: 0 };
+
+  // Capture last non-panel click so record() can associate events to elements.
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.closest && e.target.closest('#event-eyes-panel')) return;
+    __eeLastClick = { el: e.target, time: Date.now() };
+  }, true);
+
+  // When the panel requests a highlight, scroll to and flash the element.
+  window.addEventListener('message', function (e) {
+    if (!e.data || !e.data.__eeHighlightRequest) return;
+    var el = window.__eeElementMap.get(e.data.eventId);
+    if (!el || !document.contains(el)) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.style.outline = '3px solid #FF4876';
+    el.style.outlineOffset = '2px';
+    setTimeout(function () { el.style.outline = ''; el.style.outlineOffset = ''; }, 2000);
+  });
 
   // ── Native refs (captured before any page code runs) ──────────────────
   const _sendBeacon = typeof navigator.sendBeacon === 'function'
@@ -29,7 +47,6 @@
            String(d.getMilliseconds()).padStart(3, '0');
   }
 
-  // Strip DOM nodes, Events, and circular refs so postMessage can clone the data.
   function sanitize(obj, depth, seen) {
     if (depth === undefined) depth = 0;
     if (depth > 5) return '[Deep]';
@@ -45,7 +62,7 @@
     if (!seen) seen = new WeakSet();
     if (seen.has(obj)) return '[Circular]';
     seen.add(obj);
-    if (Array.isArray(obj)) return obj.map(function(v) { return sanitize(v, depth + 1, seen); });
+    if (Array.isArray(obj)) return obj.map(function (v) { return sanitize(v, depth + 1, seen); });
     var result = {};
     var keys = Object.keys(obj);
     for (var i = 0; i < keys.length; i++) {
@@ -55,7 +72,16 @@
   }
 
   function record(type, name, data) {
-    var evt = { type: type, name: name, data: sanitize(data), timestamp: timestamp() };
+    var id = ++__eeEventId;
+    var hasElement = false;
+    if (__eeLastClick.el && (Date.now() - __eeLastClick.time) < 1500) {
+      window.__eeElementMap.set(id, __eeLastClick.el);
+      hasElement = true;
+      if (window.__eeElementMap.size > 200) {
+        window.__eeElementMap.delete(window.__eeElementMap.keys().next().value);
+      }
+    }
+    var evt = { id: id, type: type, name: name, data: sanitize(data), timestamp: timestamp(), hasElement: hasElement };
     window.__eeEvents.push(evt);
     if (window.__eeEvents.length > 500) window.__eeEvents.shift();
     if (typeof window.__eeForward === 'function') window.__eeForward(evt);
@@ -153,7 +179,6 @@
 
   window.dataLayer = window.dataLayer || [];
 
-  // Replay any items already present before this script ran (rare at document_start).
   for (const item of window.dataLayer) {
     if (item && typeof item === 'object' && typeof item !== 'function') {
       const name = item.event || Object.keys(item)[0] || '(data)';
@@ -166,6 +191,11 @@
     for (let i = 0; i < arguments.length; i++) {
       const item = arguments[i];
       if (item && typeof item === 'object' && typeof item !== 'function') {
+        // Skip GTM auto-events originating from clicks inside our own panel.
+        if (typeof item.event === 'string' && item.event.startsWith('gtm.')) {
+          const el = item['gtm.element'];
+          if (el && typeof el.closest === 'function' && el.closest('#event-eyes-panel')) continue;
+        }
         const name = item.event || Object.keys(item)[0] || '(data)';
         record('dataLayer', name, item);
       }
@@ -174,8 +204,6 @@
   };
 
   // ── PerformanceObserver fallback ───────────────────────────────────────
-  // Catches any GA4 requests that slip past the interceptors above.
-  // Uses startTime as uniquifier so distinct hits to the same URL aren't collapsed.
 
   if (window.PerformanceObserver) {
     try {

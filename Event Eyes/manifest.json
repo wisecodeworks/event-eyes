@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Event Eyes",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Monitor GTM dataLayer and GA4 network events in real time.",
   "permissions": ["scripting", "activeTab"],
   "content_scripts": [{

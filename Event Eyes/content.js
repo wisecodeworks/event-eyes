@@ -1,14 +1,12 @@
 ;(function () {
   'use strict';
 
-  // Read and remove the nonce planted by background.js in the ISOLATED world.
   const NONCE = window.__eeContentNonce || '';
   delete window.__eeContentNonce;
 
   const PANEL_ID = 'event-eyes-panel';
   const STYLE_ID  = 'event-eyes-style';
 
-  // ── Prevent double-initialisation (e.g. if executeScript is called twice) ──
   if (window.__eeContentInit) {
     if (!document.getElementById(PANEL_ID)) createPanel();
     return;
@@ -16,18 +14,53 @@
   window.__eeContentInit = true;
 
   // ── State ──────────────────────────────────────────────────────────────
-  let events      = [];
-  let counter     = 0;
+  let events       = [];
+  let counter      = 0;
   let activeFilter = 'all';
-  let filterText  = '';
+  let filterText   = '';
 
   // Cached DOM refs set during createPanel()
-  let logEl    = null;
-  let countEl  = null;
-  let tabEls   = null;
+  let logEl      = null;
+  let tagsEl     = null;
+  let countEl    = null;
+  let tabEls     = null;
+  let filterWrap = null;
+
+  // ── Known tag patterns for the Tags tab ───────────────────────────────
+  const TAG_PATTERNS = [
+    { name: 'Google Tag Manager',   checks: ['googletagmanager.com/gtm.js'] },
+    { name: 'GA4 / gtag.js',        checks: ['googletagmanager.com/gtag/js'] },
+    { name: 'Segment',              checks: ['cdn.segment.com', 'cdn.segment.io'] },
+    { name: 'Hotjar',               checks: ['static.hotjar.com', 'vars.hotjar.com'] },
+    { name: 'Heap',                 checks: ['cdn.heapanalytics.com'] },
+    { name: 'Mixpanel',             checks: ['cdn.mxpnl.com', 'cdn.mixpanel.com'] },
+    { name: 'Amplitude',            checks: ['cdn.amplitude.com', 'cdn2.amplitude.com'] },
+    { name: 'Facebook Pixel',       checks: ['connect.facebook.net', 'fbevents.js'] },
+    { name: 'LinkedIn Insight',     checks: ['snap.licdn.com'] },
+    { name: 'HubSpot',              checks: ['js.hs-scripts.com', 'js.hubspot.com', 'js.hsforms.net'] },
+    { name: 'Intercom',             checks: ['widget.intercom.io', 'js.intercomcdn.com'] },
+    { name: 'Drift',                checks: ['js.drift.com', 'driftt.com'] },
+    { name: 'Optimizely',           checks: ['cdn.optimizely.com'] },
+    { name: 'Microsoft Clarity',    checks: ['clarity.ms'] },
+    { name: 'Pendo',                checks: ['cdn.pendo.io', 'pendo-io-static'] },
+    { name: 'FullStory',            checks: ['fullstory.com/s/fs.js', 'rs.fullstory.com'] },
+    { name: 'Sentry',               checks: ['browser.sentry-cdn.com'] },
+    { name: 'Datadog RUM',          checks: ['browser-intake-datadoghq.com'] },
+    { name: 'VWO',                  checks: ['visualwebsiteoptimizer.com'] },
+    { name: 'Mouseflow',            checks: ['cdn.mouseflow.com'] },
+    { name: 'Lucky Orange',         checks: ['luckyorange.net', 'luckyorange.com'] },
+    { name: 'Marketo / Munchkin',   checks: ['munchkin.marketo.net'] },
+    { name: 'Pardot',               checks: ['pi.pardot.com', 'cdn.pardot.com'] },
+    { name: 'Braze',                checks: ['js.appboycdn.com', 'cdn.braze.eu'] },
+    { name: 'TikTok Pixel',         checks: ['analytics.tiktok.com'] },
+    { name: 'Twitter / X Pixel',    checks: ['static.ads-twitter.com'] },
+    { name: 'Pinterest Tag',        checks: ['assets.pinterest.com/js/pinit'] },
+    { name: 'Qualtrics',            checks: ['qualtrics.com/WRSiteInterceptEngine'] },
+    { name: 'Chartbeat',            checks: ['static.chartbeat.com'] },
+    { name: 'Snowplow',             checks: ['sp.js', 'snowplow.js'] },
+  ];
 
   // ── Background message handler ─────────────────────────────────────────
-  // Lets the toolbar icon act as a true toggle after the first injection.
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type !== 'EE_TOGGLE') return;
     const panel = document.getElementById(PANEL_ID);
@@ -38,12 +71,10 @@
       createPanel();
       sendResponse({ handled: true, visible: true });
     }
-    return true; // keep channel open for async sendResponse
+    return true;
   });
 
   // ── Event bridge from injected.js ─────────────────────────────────────
-  // Only accept messages that carry our nonce — rejects anything a
-  // malicious page might try to post into the panel.
   window.addEventListener('message', (e) => {
     if (
       !e.data ||
@@ -52,20 +83,34 @@
       !NONCE
     ) return;
 
-    addEvent(e.data.type, e.data.name, e.data.data, e.data.timestamp);
+    addEvent(e.data.type, e.data.name, e.data.data, e.data.timestamp, e.data.id, e.data.hasElement);
   });
 
   // ── Event management ───────────────────────────────────────────────────
 
-  function addEvent(type, name, data, ts) {
+  function addEvent(type, name, data, ts, id, hasElement) {
     counter++;
-    events.unshift({ id: counter, type, name, data, timestamp: ts });
+    events.unshift({ id: id !== undefined ? id : counter, type, name, data, timestamp: ts, hasElement: !!hasElement });
     if (events.length > 200) events.pop();
-    renderEvents();
+    if (activeFilter !== 'tags') renderEvents();
+  }
+
+  // ── Export ─────────────────────────────────────────────────────────────
+
+  function exportEvents() {
+    const blob = new Blob([JSON.stringify(events, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+    a.download = 'event-eyes-' + ts + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   // ── Panel construction ─────────────────────────────────────────────────
-  // All user-supplied values are inserted via textContent — never innerHTML.
 
   function createPanel() {
     injectStyles();
@@ -73,7 +118,11 @@
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
 
-    // ── Resize handle (top-left corner) ──
+    // Stop clicks inside the panel from bubbling to GTM's document listener.
+    panel.addEventListener('click', (e) => e.stopPropagation());
+    panel.addEventListener('mousedown', (e) => e.stopPropagation());
+
+    // ── Resize handle ──
     const resizeHandle = document.createElement('div');
     resizeHandle.className = 'ee-resize';
     panel.appendChild(resizeHandle);
@@ -95,14 +144,15 @@
     const btns = document.createElement('div');
     btns.className = 'ee-btns';
 
-    const clearBtn = makeBtn('Clear', () => { events = []; renderEvents(); });
-    const miniBtn  = makeBtn('_',     () => {
+    const exportBtn = makeBtn('Export', exportEvents);
+    const clearBtn  = makeBtn('Clear', () => { events = []; renderEvents(); });
+    const miniBtn   = makeBtn('_', () => {
       panel.classList.toggle('ee-mini');
       miniBtn.textContent = panel.classList.contains('ee-mini') ? '□' : '_';
     });
     const closeBtn = makeBtn('✕', () => panel.remove());
 
-    btns.append(clearBtn, miniBtn, closeBtn);
+    btns.append(exportBtn, clearBtn, miniBtn, closeBtn);
     hdr.append(title, countEl, btns);
     panel.appendChild(hdr);
 
@@ -113,7 +163,8 @@
     const tabDefs = [
       { label: 'All',          value: 'all' },
       { label: 'dataLayer',    value: 'dataLayer' },
-      { label: 'GA4 Requests', value: 'ga4', extra: 'ga4' }
+      { label: 'GA4 Requests', value: 'ga4',  extra: 'ga4' },
+      { label: 'Tags',         value: 'tags', extra: 'tags-tab' },
     ];
 
     tabEls = tabDefs.map(def => {
@@ -127,7 +178,17 @@
         tabEls.forEach(t => t.classList.remove('active'));
         this.classList.add('active');
         activeFilter = this.dataset.filter;
-        renderEvents();
+        if (activeFilter === 'tags') {
+          logEl.style.display = 'none';
+          filterWrap.style.display = 'none';
+          tagsEl.style.display = 'flex';
+          renderTags();
+        } else {
+          logEl.style.display = '';
+          filterWrap.style.display = '';
+          tagsEl.style.display = 'none';
+          renderEvents();
+        }
       });
       tabBar.appendChild(tab);
       return tab;
@@ -136,7 +197,7 @@
     panel.appendChild(tabBar);
 
     // ── Filter ──
-    const filterWrap = document.createElement('div');
+    filterWrap = document.createElement('div');
     filterWrap.className = 'ee-filter';
     const filterInput = document.createElement('input');
     filterInput.type = 'text';
@@ -148,10 +209,16 @@
     filterWrap.appendChild(filterInput);
     panel.appendChild(filterWrap);
 
-    // ── Log ──
+    // ── Event log ──
     logEl = document.createElement('div');
     logEl.className = 'ee-log';
     panel.appendChild(logEl);
+
+    // ── Tags view ──
+    tagsEl = document.createElement('div');
+    tagsEl.className = 'ee-tags-view';
+    tagsEl.style.display = 'none';
+    panel.appendChild(tagsEl);
 
     document.body.appendChild(panel);
 
@@ -168,7 +235,7 @@
     return btn;
   }
 
-  // ── Rendering ──────────────────────────────────────────────────────────
+  // ── Event rendering ────────────────────────────────────────────────────
 
   function renderEvents() {
     if (!logEl) return;
@@ -186,7 +253,6 @@
       return true;
     });
 
-    // Clear log safely
     while (logEl.firstChild) logEl.removeChild(logEl.firstChild);
 
     if (filtered.length === 0) {
@@ -208,9 +274,15 @@
     const isGA4 = evt.type === 'ga4';
 
     const el = document.createElement('div');
-    el.className = 'ee-evt' + (isGA4 ? ' ga4' : '');
+    el.className = 'ee-evt' + (isGA4 ? ' ga4' : '') + (evt.hasElement ? ' ee-has-element' : '');
 
-    // Header row
+    if (evt.hasElement) {
+      el.title = 'Click to highlight this element on the page';
+      el.addEventListener('click', () => {
+        window.postMessage({ __eeHighlightRequest: true, eventId: evt.id }, '*');
+      });
+    }
+
     const hdr = document.createElement('div');
     hdr.className = 'ee-evt-hdr';
 
@@ -224,12 +296,19 @@
 
     const name = document.createElement('span');
     name.className = 'ee-evt-name';
-    name.textContent = evt.name; // textContent — never innerHTML
+    name.textContent = evt.name;
 
     hdr.append(time, badge, name);
+
+    if (evt.hasElement) {
+      const locator = document.createElement('span');
+      locator.className = 'ee-locator';
+      locator.textContent = '⊙';
+      hdr.appendChild(locator);
+    }
+
     el.appendChild(hdr);
 
-    // Parameter rows
     if (evt.data && typeof evt.data === 'object') {
       const pairs = flattenParams(evt.data);
       if (pairs.length > 0) {
@@ -242,12 +321,12 @@
 
           const k = document.createElement('span');
           k.className = 'ee-param-key';
-          k.textContent = key; // textContent — safe
+          k.textContent = key;
 
           const v = document.createElement('span');
           v.className = 'ee-param-val';
           v.textContent = typeof val === 'object' && val !== null
-            ? safeStringify(val) : String(val); // textContent — safe
+            ? safeStringify(val) : String(val);
 
           row.append(k, v);
           paramsWrap.appendChild(row);
@@ -260,10 +339,73 @@
     return el;
   }
 
-  /**
-   * Flattens one level of nested objects into dot-notation key/value pairs
-   * for display. Skips 'event' and 'eventName' since they're shown in the header.
-   */
+  // ── Tags rendering ─────────────────────────────────────────────────────
+
+  function renderTags() {
+    if (!tagsEl) return;
+    while (tagsEl.firstChild) tagsEl.removeChild(tagsEl.firstChild);
+
+    // Collect script URLs from DOM + performance timeline
+    const urlSet = new Set();
+    for (const s of document.querySelectorAll('script[src]')) urlSet.add(s.src);
+    try {
+      for (const entry of performance.getEntriesByType('resource')) urlSet.add(entry.name);
+    } catch {}
+    const urls = Array.from(urlSet);
+
+    const detected = TAG_PATTERNS.filter(p =>
+      p.checks.some(c => urls.some(u => u.includes(c)))
+    );
+
+    // Header row
+    const hdr = document.createElement('div');
+    hdr.className = 'ee-tags-hdr';
+    const hdrTitle = document.createElement('span');
+    hdrTitle.textContent = detected.length
+      ? `${detected.length} tag${detected.length !== 1 ? 's' : ''} detected`
+      : 'No known tags detected';
+    const refreshBtn = makeBtn('↻ Refresh', renderTags);
+    hdr.append(hdrTitle, refreshBtn);
+    tagsEl.appendChild(hdr);
+
+    // Tag rows
+    const list = document.createElement('div');
+    list.className = 'ee-tags-list';
+
+    if (detected.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'ee-empty';
+      empty.textContent = 'None of the known tag patterns were found on this page';
+      list.appendChild(empty);
+    } else {
+      for (const tag of detected) {
+        const row = document.createElement('div');
+        row.className = 'ee-tag-item';
+
+        const dot = document.createElement('span');
+        dot.className = 'ee-tag-dot';
+        dot.textContent = '●';
+
+        const label = document.createElement('span');
+        label.className = 'ee-tag-name';
+        label.textContent = tag.name;
+
+        row.append(dot, label);
+        list.appendChild(row);
+      }
+    }
+
+    tagsEl.appendChild(list);
+
+    // Footer
+    const footer = document.createElement('div');
+    footer.className = 'ee-tags-footer';
+    footer.textContent = `Checked ${TAG_PATTERNS.length} patterns`;
+    tagsEl.appendChild(footer);
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────
+
   function flattenParams(data) {
     const result = [];
     for (const [key, val] of Object.entries(data)) {
@@ -356,8 +498,6 @@
   }
 
   // ── Styles ─────────────────────────────────────────────────────────────
-  // Injected once into <head>. All selectors are scoped under #event-eyes-panel
-  // to avoid colliding with any page styles.
 
   function injectStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -463,6 +603,7 @@
 #event-eyes-panel .ee-tab:hover { color: #aaa; }
 #event-eyes-panel .ee-tab.active { color: #fff; border-bottom-color: #FF4876; }
 #event-eyes-panel .ee-tab.ga4.active { border-bottom-color: #60a5fa; }
+#event-eyes-panel .ee-tab.tags-tab.active { border-bottom-color: #4ade80; }
 
 /* Filter */
 #event-eyes-panel .ee-filter {
@@ -484,7 +625,7 @@
 }
 #event-eyes-panel .ee-filter input:focus { border-color: #FF4876; }
 
-/* Log */
+/* Event log */
 #event-eyes-panel .ee-log {
   flex: 1;
   overflow-y: auto;
@@ -506,6 +647,8 @@
   border-left: 3px solid #FF4876;
 }
 #event-eyes-panel .ee-evt.ga4 { border-left-color: #60a5fa; }
+#event-eyes-panel .ee-evt.ee-has-element { cursor: pointer; }
+#event-eyes-panel .ee-evt.ee-has-element:hover { background: #1c1c1c; }
 #event-eyes-panel .ee-evt-hdr {
   display: flex;
   align-items: center;
@@ -535,6 +678,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+#event-eyes-panel .ee-locator {
+  color: #FF4876;
+  font-size: 11px;
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+#event-eyes-panel .ee-evt.ee-has-element:hover .ee-locator { opacity: 1; }
 
 /* Params */
 #event-eyes-panel .ee-params {
@@ -557,6 +707,65 @@
   flex-shrink: 0;
 }
 #event-eyes-panel .ee-param-val { color: #ccc; word-break: break-all; }
+
+/* Tags view */
+#event-eyes-panel .ee-tags-view {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+#event-eyes-panel .ee-tags-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #111;
+  border-bottom: 1px solid #222;
+  flex-shrink: 0;
+  color: #aaa;
+  font-size: 11px;
+}
+#event-eyes-panel .ee-tags-hdr button {
+  background: #252525;
+  border: 1px solid #444;
+  color: #999;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+}
+#event-eyes-panel .ee-tags-hdr button:hover { background: #333; color: #fff; }
+#event-eyes-panel .ee-tags-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+#event-eyes-panel .ee-tags-list::-webkit-scrollbar { width: 6px; }
+#event-eyes-panel .ee-tags-list::-webkit-scrollbar-track { background: #111; }
+#event-eyes-panel .ee-tags-list::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+#event-eyes-panel .ee-tag-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  border-radius: 5px;
+  background: #141414;
+  border-left: 2px solid #4ade80;
+}
+#event-eyes-panel .ee-tag-dot { color: #4ade80; font-size: 10px; flex-shrink: 0; }
+#event-eyes-panel .ee-tag-name { color: #ccc; font-size: 12px; }
+#event-eyes-panel .ee-tags-footer {
+  padding: 8px 12px;
+  color: #333;
+  font-size: 10px;
+  text-align: center;
+  border-top: 1px solid #1a1a1a;
+  flex-shrink: 0;
+}
 
 /* Empty state */
 #event-eyes-panel .ee-empty {

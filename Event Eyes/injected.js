@@ -12,14 +12,16 @@
            String(d.getMilliseconds()).padStart(3, '0');
   }
 
-  function dispatch(type, name, data, ts) {
+  function dispatch(type, name, data, ts, id, hasElement) {
     window.postMessage({
       __eventEyes: true,
       nonce: NONCE,
       type,
       name,
       data,
-      timestamp: ts || timestamp()
+      timestamp: ts || timestamp(),
+      id,
+      hasElement
     }, '*');
   }
 
@@ -27,10 +29,10 @@
   // Replay its buffer then subscribe for live events going forward.
   if (window.__eeEarlyInit && Array.isArray(window.__eeEvents)) {
     for (const evt of window.__eeEvents) {
-      dispatch(evt.type, evt.name, evt.data, evt.timestamp);
+      dispatch(evt.type, evt.name, evt.data, evt.timestamp, evt.id, evt.hasElement);
     }
     window.__eeForward = function (evt) {
-      dispatch(evt.type, evt.name, evt.data, evt.timestamp);
+      dispatch(evt.type, evt.name, evt.data, evt.timestamp, evt.id, evt.hasElement);
     };
     return; // done — early.js handles all capture
   }

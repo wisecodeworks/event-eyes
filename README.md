@@ -2,7 +2,7 @@
 
 A Chrome extension for monitoring analytics events in real time — dataLayer pushes, GA4 network hits, and third-party tag detection — without opening DevTools.
 
-![Version](https://img.shields.io/badge/version-1.2.0-FF4876) ![Manifest](https://img.shields.io/badge/manifest-v3-blue)
+![Version](https://img.shields.io/badge/version-1.4.0-FF4876) ![Manifest](https://img.shields.io/badge/manifest-v3-blue)
 
 ---
 
@@ -47,7 +47,7 @@ A **Refresh** button rescans the page — useful on single-page apps where tags 
 Click **Export** in the panel header to download all captured events as a timestamped `.json` file. Useful for sharing with teammates or auditing event schemas offline.
 
 ### Element highlighting
-Events triggered by a user click show a `⊙` indicator and a pointer cursor. Clicking the event row scrolls the page to the element that triggered it and flashes a pink outline around it for 2 seconds.
+Events triggered by a user click show a `⊙` indicator and a pointer cursor. Clicking the event row scrolls the page to the element that triggered it and activates a **cosmic highlight** — a pulsing pink-to-violet glow with radiating ping rings. The highlight stays until you click a different event row.
 
 Works for any event (dataLayer or GA4) that fires within 1.5 seconds of a click.
 
@@ -87,6 +87,16 @@ A random nonce generated per-session validates all cross-world messages, prevent
 ---
 
 ## Changelog
+
+### v1.4.0
+- **Cosmic element highlight** — replaced 2-second outline flash with a persistent pink-to-violet pulsing glow + radiating ping rings; highlight stays active until a new event row is clicked
+- **Fixed multi-event highlight bug** — multiple events from the same click (e.g. dataLayer + GA4) all share the same DOM node; clicking any of their ⊙ rows now correctly re-applies the highlight instead of toggling it off
+- **Panel interaction guard** — interacting with the panel (clicking event rows, dragging, resizing) no longer triggers or records page analytics events; a `__eePanelBusy` flag in `early.js` suppresses `record()` for 100ms after any panel mousedown
+- **Removed Segment tab** — stripped Segment interception and UI entirely; tab count reduced from 5 to 4
+
+### v1.3.0
+- Added **dark/light theme toggle** — ☀/🌙 button in the header; preference persists across sessions
+- Added **copy-to-clipboard on params** — click any parameter row to copy `key: value`; ⎘ hint on hover, ✓ confirmation on copy
 
 ### v1.2.0
 - Added **Tags tab** — detects 30 common analytics/marketing scripts

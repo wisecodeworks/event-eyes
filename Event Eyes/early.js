@@ -12,21 +12,110 @@
   var __eeEventId = 0;
   var __eeLastClick = { el: null, time: 0 };
 
+  // While the user is interacting with the panel (click, drag, resize) we
+  // suppress event recording entirely — page scripts triggered by those
+  // interactions should not appear in the log.
+  var __eePanelBusy = false;
+  var __eePanelBusyTimer = null;
+
   // Capture last non-panel click so record() can associate events to elements.
   document.addEventListener('click', function (e) {
     if (e.target && e.target.closest && e.target.closest('#event-eyes-panel')) return;
     __eeLastClick = { el: e.target, time: Date.now() };
   }, true);
 
-  // When the panel requests a highlight, scroll to and flash the element.
+  // Suppress recording and clear element association on any panel mousedown.
+  document.addEventListener('mousedown', function (e) {
+    if (e.target && e.target.closest && e.target.closest('#event-eyes-panel')) {
+      __eePanelBusy = true;
+      if (__eePanelBusyTimer) clearTimeout(__eePanelBusyTimer);
+      __eeLastClick = { el: null, time: 0 };
+    }
+  }, true);
+
+  // Re-enable recording 100 ms after mouse release (covers events that fire
+  // synchronously after the interaction, e.g. custom click handlers).
+  document.addEventListener('mouseup', function () {
+    if (!__eePanelBusy) return;
+    if (__eePanelBusyTimer) clearTimeout(__eePanelBusyTimer);
+    __eePanelBusyTimer = setTimeout(function () { __eePanelBusy = false; }, 100);
+  }, true);
+
+  // ── Cosmic highlight ──────────────────────────────────────────────────
+  var __eeHighlightedEl = null;
+  var __eePingInterval  = null;
+
+  function __eeInjectHighlightStyle() {
+    if (document.getElementById('__ee-hl-style')) return;
+    var s = document.createElement('style');
+    s.id = '__ee-hl-style';
+    s.textContent =
+      // Glow animation on the element itself: pink → fuchsia → violet → back
+      '@keyframes __ee-glow{' +
+        '0%,100%{outline:2px solid #FF4876;outline-offset:2px;' +
+          'box-shadow:0 0 6px 3px rgba(255,72,118,.9),0 0 18px 8px rgba(255,72,118,.45),0 0 38px 14px rgba(255,72,118,.18);}' +
+        '40%{outline:2px solid #f0abfc;outline-offset:5px;' +
+          'box-shadow:0 0 10px 5px rgba(240,171,252,.95),0 0 28px 12px rgba(255,72,118,.6),0 0 55px 22px rgba(168,85,247,.3);}' +
+        '70%{outline:2px solid #c084fc;outline-offset:3px;' +
+          'box-shadow:0 0 8px 4px rgba(192,132,252,.9),0 0 22px 9px rgba(168,85,247,.55),0 0 44px 18px rgba(255,72,118,.2);}' +
+      '}' +
+      '.__ee-hl{' +
+        'outline:2px solid #FF4876!important;' +
+        'outline-offset:2px!important;' +
+        'animation:__ee-glow 2s ease-in-out infinite!important;' +
+      '}' +
+      // Ping rings: injected as separate fixed divs
+      '@keyframes __ee-ping{' +
+        '0%{transform:scale(1);opacity:.85;border-color:rgba(255,72,118,.9);}' +
+        '60%{border-color:rgba(192,132,252,.6);}' +
+        '100%{transform:scale(2);opacity:0;border-color:rgba(168,85,247,0);}' +
+      '}' +
+      '[data-ee-ping]{' +
+        'position:fixed!important;pointer-events:none!important;' +
+        'z-index:2147483646!important;border:2px solid rgba(255,72,118,.9)!important;' +
+        'border-radius:6px!important;animation:__ee-ping 1.4s ease-out forwards!important;' +
+      '}';
+    (document.head || document.documentElement).appendChild(s);
+  }
+
+  function __eeCreatePing(el) {
+    var rect = el.getBoundingClientRect();
+    var p = document.createElement('div');
+    p.setAttribute('data-ee-ping', '');
+    p.style.top    = (rect.top    - 6) + 'px';
+    p.style.left   = (rect.left   - 6) + 'px';
+    p.style.width  = (rect.width  + 12) + 'px';
+    p.style.height = (rect.height + 12) + 'px';
+    document.body.appendChild(p);
+    setTimeout(function () { if (p.parentNode) p.parentNode.removeChild(p); }, 1500);
+  }
+
+  function __eeClearHighlight() {
+    if (__eeHighlightedEl) {
+      __eeHighlightedEl.classList.remove('__ee-hl');
+      __eeHighlightedEl = null;
+    }
+    if (__eePingInterval) { clearInterval(__eePingInterval); __eePingInterval = null; }
+    document.querySelectorAll('[data-ee-ping]').forEach(function (p) { p.remove(); });
+  }
+
+  // When the panel requests a highlight, scroll to and pulse the element.
+  // Clicking the same row again toggles the highlight off.
   window.addEventListener('message', function (e) {
     if (!e.data || !e.data.__eeHighlightRequest) return;
     var el = window.__eeElementMap.get(e.data.eventId);
     if (!el || !document.contains(el)) return;
+    __eeInjectHighlightStyle();
+    __eeClearHighlight();
+    __eeHighlightedEl = el;
+    el.classList.add('__ee-hl');
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    el.style.outline = '3px solid #FF4876';
-    el.style.outlineOffset = '2px';
-    setTimeout(function () { el.style.outline = ''; el.style.outlineOffset = ''; }, 2000);
+    __eeCreatePing(el);
+    __eePingInterval = setInterval(function () {
+      if (__eeHighlightedEl && document.contains(__eeHighlightedEl)) {
+        __eeCreatePing(__eeHighlightedEl);
+      }
+    }, 1400);
   });
 
   // ── Native refs (captured before any page code runs) ──────────────────
@@ -72,6 +161,7 @@
   }
 
   function record(type, name, data) {
+    if (__eePanelBusy) return;
     var id = ++__eeEventId;
     var hasElement = false;
     if (__eeLastClick.el && (Date.now() - __eeLastClick.time) < 1500) {
